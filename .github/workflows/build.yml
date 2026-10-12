@@ -1,0 +1,74 @@
+name: Build Gentoo Binary Packages
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Space-separated list of packages to build'
+        required: false
+        default: 'sys-kernel/gentoo-kernel-bin sys-boot/grub net-misc/dhcpcd app-admin/sudo app-editors/neovim'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: gentoo/stage3:amd64-openrc
+      options: --privileged
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Free Disk Space
+        run: |
+          rm -rf /usr/local/lib/android || true
+          rm -rf /usr/share/dotnet || true
+
+      - name: Configure Gentoo make.conf
+        run: |
+          mkdir -p /etc/portage/make.conf.d
+
+          cat << 'EOF' > /etc/portage/make.conf
+          # Target flags for GMA 4500 (Core 2 Duo / Penryn)
+          CFLAGS="-O2 -pipe -march=core2 -mtune=core2"
+          CXXFLAGS="${CFLAGS}"
+          CPU_FLAGS_X86="mmx mmxext sse sse2 sse3 ssse3"
+
+          VIDEO_CARDS="intel i965"
+          INPUT_DEVICES="libinput synaptics keyboard mouse"
+
+          FEATURES="binpkg-multi-instance buildpkg parallel-fetch"
+          PKGDIR="/var/cache/binpkgs"
+          EMERGE_DEFAULT_OPTS="--jobs=2 --load-average=4.0 --verbose"
+
+          ACCEPT_KEYWORDS="amd64"
+          ACCEPT_LICENSE="*"
+          USE="X xorg alsa pulseaudio opengl vaapi -systemd -kde -gnome"
+          EOF
+
+      - name: Sync Portage Tree
+        run: emerge-webrsync
+
+      - name: Build System & Target Packages
+        run: |
+          # Use prebuilt distribution kernel binary package to avoid 2-hour compile times
+          PACKAGES="sys-kernel/gentoo-kernel-bin sys-boot/grub net-misc/dhcpcd app-admin/sudo"
+          
+          if [ -n "${{ github.event.inputs.packages }}" ]; then
+            PACKAGES="$PACKAGES ${{ github.event.inputs.packages }}"
+          fi
+
+          # Generate binary packages for @system and additional packages
+          emerge --buildpkgonly --deep --newuse @system $PACKAGES
+
+      - name: Generate Binhost Index
+        run: emaint binhost --fix
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: gentoo-binpkgs
+          path: /var/cache/binpkgs/
+          retention-days: 7
