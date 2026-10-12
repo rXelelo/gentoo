@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: 'Space-separated list of packages to build'
+        description: 'Space-separated list of additional packages to build'
         required: false
-        default: 'sys-kernel/gentoo-kernel-bin sys-boot/grub net-misc/dhcpcd app-admin/sudo app-editors/neovim'
+        default: 'app-editors/neovim'
 
 jobs:
   build:
@@ -26,12 +26,12 @@ jobs:
           rm -rf /usr/local/lib/android || true
           rm -rf /usr/share/dotnet || true
 
-      - name: Configure Gentoo make.conf
+      - name: Configure Gentoo Portage & USE Flags
         run: |
-          mkdir -p /etc/portage/make.conf.d
+          mkdir -p /etc/portage/make.conf.d /etc/portage/package.use
 
+          # Compiler & target flags for GMA 4500 (Core 2 Duo / Penryn)
           cat << 'EOF' > /etc/portage/make.conf
-          # Target flags for GMA 4500 (Core 2 Duo / Penryn)
           CFLAGS="-O2 -pipe -march=core2 -mtune=core2"
           CXXFLAGS="${CFLAGS}"
           CPU_FLAGS_X86="mmx mmxext sse sse2 sse3 ssse3"
@@ -48,25 +48,35 @@ jobs:
           USE="X xorg alsa pulseaudio opengl vaapi dracut -systemd -kde -gnome"
           EOF
 
+          # Required USE flag for gentoo-kernel-bin initramfs generation
+          echo "sys-kernel/installkernel dracut" > /etc/portage/package.use/installkernel
+
       - name: Sync Portage Tree
         run: emerge-webrsync
 
-      - name: Build System & Target Packages
-        run: |
-          # Use prebuilt distribution kernel binary package to avoid 2-hour compile times
-          PACKAGES="sys-kernel/gentoo-kernel-bin sys-boot/grub net-misc/dhcpcd app-admin/sudo"
-          
-          if [ -n "${{ github.event.inputs.packages }}" ]; then
-            PACKAGES="$PACKAGES ${{ github.event.inputs.packages }}"
-          fi
+      - name: Cache Binary Packages
+        uses: actions/cache@v4
+        with:
+          path: /var/cache/binpkgs
+          key: binpkgs-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            binpkgs-${{ runner.os }}-
 
-          # Generate binary packages for @system and additional packages
-          emerge --buildpkgonly --deep --newuse @system $PACKAGES
+      - name: Build Packages & Dependencies
+        run: |
+          # Base target set for initial boot environment
+          BASE_PACKAGES="sys-kernel/gentoo-kernel-bin sys-boot/grub net-misc/dhcpcd app-admin/sudo"
+          
+          EXTRA_PACKAGES="${{ github.event.inputs.packages }}"
+          TARGETS="@system $BASE_PACKAGES $EXTRA_PACKAGES"
+
+          # --buildpkg merges dependencies into the runner while populating /var/cache/binpkgs
+          emerge --buildpkg --deep --newuse $TARGETS
 
       - name: Generate Binhost Index
         run: emaint binhost --fix
 
-      - name: Upload Artifacts
+      - name: Upload Binary Packages Artifact
         uses: actions/upload-artifact@v4
         with:
           name: gentoo-binpkgs
