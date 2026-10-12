@@ -1,4 +1,4 @@
-name: Build Gentoo Binary Packages
+name: Build & Publish Gentoo Binary Packages
 
 on:
   push:
@@ -6,13 +6,15 @@ on:
   workflow_dispatch:
     inputs:
       packages:
-        description: 'Space-separated list of additional packages to build'
+        description: 'Space-separated list of packages to build'
         required: false
         default: 'app-editors/neovim'
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     container:
       image: gentoo/stage3:amd64-openrc
       options: --privileged
@@ -26,15 +28,62 @@ jobs:
           rm -rf /usr/local/lib/android || true
           rm -rf /usr/share/dotnet || true
 
-      - name: Configure Gentoo Portage & USE Flags
+      - name: Configure Gentoo Portage & Pure 64-bit ABI
         run: |
           mkdir -p /etc/portage/make.conf.d /etc/portage/package.use
 
-          # Compiler & target flags for GMA 4500 (Core 2 Duo / Penryn)
           cat << 'EOF' > /etc/portage/make.conf
           CFLAGS="-O2 -pipe -march=core2 -mtune=core2"
           CXXFLAGS="${CFLAGS}"
           CPU_FLAGS_X86="mmx mmxext sse sse2 sse3 ssse3"
+
+          VIDEO_CARDS="intel i965"
+          INPUT_DEVICES="libinput synaptics keyboard mouse"
+
+          FEATURES="binpkg-multi-instance buildpkg parallel-fetch"
+          PKGDIR="/var/cache/binpkgs"
+          EMERGE_DEFAULT_OPTS="--jobs=2 --load-average=4.0 --verbose --update --newuse --deep"
+
+          ACCEPT_KEYWORDS="amd64"
+          ACCEPT_LICENSE="*"
+          
+          # Pure 64-bit ABI configuration to eliminate multilib/32-bit slot conflicts
+          ABI_X86="64"
+          USE="X xorg alsa pulseaudio opengl vaapi dracut harfbuzz -systemd -kde -gnome -32bit"
+          EOF
+
+          echo "sys-kernel/installkernel dracut" > /etc/portage/package.use/installkernel
+          echo "media-libs/freetype harfbuzz png X" > /etc/portage/package.use/freetype
+          echo "x11-libs/pango -introspection" > /etc/portage/package.use/pango
+
+      - name: Sync Portage Tree
+        run: emerge-webrsync
+
+      - name: Build Target Packages
+        run: |
+          BASE_PACKAGES="sys-kernel/gentoo-kernel-bin sys-boot/grub net-misc/dhcpcd app-admin/sudo net-wireless/wpa_supplicant net-wireless/iw"
+          EXTRA_PACKAGES="${{ github.event.inputs.packages }}"
+          TARGETS="@system $BASE_PACKAGES $EXTRA_PACKAGES"
+
+          emerge --buildpkg --deep --newuse $TARGETS
+
+      - name: Generate Binhost Index
+        run: emaint binhost --fix
+
+      - name: Compress Binhost Directory
+        run: |
+          cd /var/cache
+          tar -cvJf binpkgs.tar.xz binpkgs/
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: binhost
+          name: "Gentoo Binhost Store"
+          body: "Automated binary package build for Intel GMA 4500 (Core 2 Duo / Penryn)."
+          files: /var/cache/binpkgs.tar.xz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
           VIDEO_CARDS="intel i965"
           INPUT_DEVICES="libinput synaptics keyboard mouse"
