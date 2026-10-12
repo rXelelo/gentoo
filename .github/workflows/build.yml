@@ -1,4 +1,4 @@
-name: Build & Publish Gentoo Binary Packages
+name: Build & Publish Gentoo Binary Packages to GitHub Pages
 
 on:
   push:
@@ -10,11 +10,14 @@ on:
         required: false
         default: 'app-editors/neovim'
 
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     container:
       image: gentoo/stage3:amd64-openrc
       options: --privileged
@@ -70,64 +73,9 @@ jobs:
       - name: Generate Binhost Index
         run: emaint binhost --fix
 
-      - name: Compress Binhost Directory
-        run: |
-          cd /var/cache
-          tar -cvJf binpkgs.tar.xz binpkgs/
-
-      - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v2
+      - name: Deploy Binhost to GitHub Pages Branch
+        uses: peaceiris/actions-gh-pages@v4
         with:
-          tag_name: binhost
-          name: "Gentoo Binhost Store"
-          body: "Automated binary package build for Intel GMA 4500 (Core 2 Duo / Penryn)."
-          files: /var/cache/binpkgs.tar.xz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-          VIDEO_CARDS="intel i965"
-          INPUT_DEVICES="libinput synaptics keyboard mouse"
-
-          FEATURES="binpkg-multi-instance buildpkg parallel-fetch"
-          PKGDIR="/var/cache/binpkgs"
-          EMERGE_DEFAULT_OPTS="--jobs=2 --load-average=4.0 --verbose"
-
-          ACCEPT_KEYWORDS="amd64"
-          ACCEPT_LICENSE="*"
-          USE="X xorg alsa pulseaudio opengl vaapi dracut -systemd -kde -gnome"
-          EOF
-
-          # Required USE flag for gentoo-kernel-bin initramfs generation
-          echo "sys-kernel/installkernel dracut" > /etc/portage/package.use/installkernel
-
-      - name: Sync Portage Tree
-        run: emerge-webrsync
-
-      - name: Cache Binary Packages
-        uses: actions/cache@v4
-        with:
-          path: /var/cache/binpkgs
-          key: binpkgs-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            binpkgs-${{ runner.os }}-
-
-      - name: Build Packages & Dependencies
-        run: |
-          # Base target set for initial boot environment
-          BASE_PACKAGES="sys-kernel/gentoo-kernel-bin sys-boot/grub net-misc/dhcpcd app-admin/sudo"
-          
-          EXTRA_PACKAGES="${{ github.event.inputs.packages }}"
-          TARGETS="@system $BASE_PACKAGES $EXTRA_PACKAGES"
-
-          # --buildpkg merges dependencies into the runner while populating /var/cache/binpkgs
-          emerge --buildpkg --deep --newuse $TARGETS
-
-      - name: Generate Binhost Index
-        run: emaint binhost --fix
-
-      - name: Upload Binary Packages Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: gentoo-binpkgs
-          path: /var/cache/binpkgs/
-          retention-days: 7
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: /var/cache/binpkgs
+          publish_branch: gh-pages
