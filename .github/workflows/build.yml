@@ -45,7 +45,7 @@ jobs:
 
           ACCEPT_KEYWORDS="amd64"
           ACCEPT_LICENSE="*"
-          USE="X xorg alsa pulseaudio opengl vaapi -systemd -kde -gnome"
+          USE="X xorg alsa pulseaudio opengl vaapi dracut -systemd -kde -gnome"
           EOF
 
       - name: Sync Portage Tree
